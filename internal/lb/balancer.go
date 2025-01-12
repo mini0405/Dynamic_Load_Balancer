@@ -2,11 +2,10 @@
 package lb
 
 import (
+	"load-balancer/internal/server"
 	"net/http"
 	"strings"
 	"sync"
-
-	"load-balancer/internal/server"
 )
 
 // Balancer orchestrates the load-balancing process.

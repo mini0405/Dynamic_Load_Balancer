@@ -44,8 +44,8 @@ func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		LBPort:              lbPort,
 		HealthCheckInterval: 5 * time.Second, // default 5 seconds
-		UseIPHash:           true,
-		UseStickySessions:   true,
+		UseIPHash:           false,
+		UseStickySessions:   false,
 		CircuitBreaker: CircuitBreakerConfig{
 			FailureThreshold: 3,
 			CooldownPeriod:   10 * time.Second,
@@ -62,7 +62,7 @@ func LoadConfig() (*Config, error) {
 				Address: "localhost",
 				Port:    9002,
 			},
-			// Add more servers as needed
+			// We can add more servers if needed
 		},
 	}
 

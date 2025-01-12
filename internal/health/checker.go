@@ -1,4 +1,3 @@
-// internal/health/checker.go
 package health
 
 import (
@@ -51,79 +50,58 @@ func (hc *Checker) Stop() {
 	close(hc.doneCh)
 }
 
-// checkServers pulls updated metrics and recalculates weights
+// checkServers pulls updated metrics and recalculates weights.
 func (hc *Checker) checkServers() {
 	servers := hc.ServerManager.GetAllServers()
 
-	// Weighted formula coefficients (example)
+	// Weighted formula coefficients (example weights for each metric)
 	alpha := 0.25   // CPU usage importance
 	beta := 0.20    // Memory usage importance
 	gamma := 0.25   // Response time importance
 	delta := 0.25   // Error rate importance
 	epsilon := 0.05 // Ping status importance
 
-	// 1) Get updated metrics for each server
+	// 1) Fetch updated metrics and calculate health scores
 	for _, srv := range servers {
-		cpuUsage := fetchCPUUsage(srv)
-		memUsage := fetchMemoryUsage(srv)
-		respTime := fetchResponseTime(srv)
-		errorRate := fetchErrorRate(srv)
-		pingStatus := fetchPingStatus(srv)
+		server.FetchMetrics(srv) // Fetch all metrics at once
 
-		// 2) Calculate health score:
-		//    H = α(1 - CPU) + β(1 - MEM) + γ(1 - Resp) + δ(1 - Error) + ε*Ping
-		//    (assuming CPU/MEM/Resp/Error are normalized in [0..1])
-		H := alpha*(1-cpuUsage) +
-			beta*(1-memUsage) +
-			gamma*(1-respTime) +
-			delta*(1-errorRate) +
-			epsilon*pingStatus
+		// Calculate health score:
+		// H = α(1 - CPU) + β(1 - MEM) + γ(1 - Resp) + δ(1 - Error) + ε*Ping
+		// Assumes CPU, MEM, Resp, Error are normalized in [0..1]
+		H := alpha*(1-srv.CPUUsage) +
+			beta*(1-srv.MemUsage) +
+			gamma*(1-srv.ResponseTime/500.0) + // Normalize response time (max 500ms)
+			delta*(1-srv.ErrorRate) +
+			epsilon*boolToFloat64(srv.PingStatus)
 
 		srv.HealthScore = H
 	}
 
-	// 3) Convert each HealthScore to CurrentWeight = H / sum(H)
-	sumH := 0.0
+	// 2) Normalize health scores into weights
+	totalHealth := 0.0
 	for _, srv := range servers {
-		sumH += srv.HealthScore
+		totalHealth += srv.HealthScore
 	}
-	if sumH > 0 {
+
+	if totalHealth > 0 {
 		for _, srv := range servers {
-			srv.CurrentWeight = srv.HealthScore / sumH
+			srv.CurrentWeight = srv.HealthScore / totalHealth
 		}
 	} else {
-		// Edge case: if sumH <= 0, set all weights to 0
+		// Edge case: If total health <= 0, set all weights to 0
 		for _, srv := range servers {
 			srv.CurrentWeight = 0
 		}
 	}
 
-	// 4) Update the manager
+	// 3) Update the server manager with recalculated weights
 	hc.ServerManager.UpdateServers(servers)
 }
 
-// The below functions emulate fetching real metrics (e.g., via HTTP calls).
-// Replace them with actual logic in production.
-
-func fetchCPUUsage(srv *server.Server) float64 {
-	return srv.CPUUsage
-}
-
-func fetchMemoryUsage(srv *server.Server) float64 {
-	return srv.MemUsage
-}
-
-func fetchResponseTime(srv *server.Server) float64 {
-	return srv.ResponseTime
-}
-
-func fetchErrorRate(srv *server.Server) float64 {
-	return srv.ErrorRate
-}
-
-func fetchPingStatus(srv *server.Server) float64 {
-	if srv.PingStatus {
-		return 1
+// boolToFloat64 converts a boolean value to float64 (1 for true, 0 for false).
+func boolToFloat64(value bool) float64 {
+	if value {
+		return 1.0
 	}
-	return 0
+	return 0.0
 }

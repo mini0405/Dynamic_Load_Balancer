@@ -1,8 +1,8 @@
-// cmd/loadbalancer/main.go
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,11 +13,8 @@ import (
 	"time"
 
 	"load-balancer/internal/config"
-
 	"load-balancer/internal/health"
-
 	"load-balancer/internal/lb"
-
 	"load-balancer/internal/server"
 )
 
@@ -70,6 +67,9 @@ func main() {
 		// 7b. Forward request to chosen server (simplistic example)
 		proxyRequest(chosenSrv, w, r, cbCoordinator)
 	})
+
+	// Add a `/metrics` endpoint
+	mux.HandleFunc("/metrics", metricsHandler(srvMgr))
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.LBPort),
@@ -139,9 +139,6 @@ func proxyRequest(srv *server.Server, w http.ResponseWriter, r *http.Request, cb
 		}
 	}
 
-	// If the request had a body, the Body was already consumed by NewRequest.
-	// If you need to read it again or pass it directly, handle carefully.
-
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -165,5 +162,25 @@ func proxyRequest(srv *server.Server, w http.ResponseWriter, r *http.Request, cb
 	// Copy response body
 	if _, copyErr := io.Copy(w, resp.Body); copyErr != nil {
 		log.Printf("Error copying response body: %v", copyErr)
+	}
+}
+
+// metricsHandler handles the /metrics endpoint and returns server metrics.
+func metricsHandler(srvMgr *server.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// Fetch metrics from the server manager
+		servers := srvMgr.GetAllServers()
+
+		// Serialize server metrics to JSON
+		response, err := json.Marshal(servers)
+		if err != nil {
+			http.Error(w, "Failed to generate metrics", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(response)
 	}
 }
