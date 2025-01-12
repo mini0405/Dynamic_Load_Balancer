@@ -181,7 +181,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## 💬 **Feedback**
 
-Have ideas or suggestions? Open an issue or reach out to us at [your_email@example.com](mailto:pmishra4@ncsu.edu).
+Have ideas or suggestions? Open an issue or reach out to us at [pmishra4@ncsu.edu](mailto:pmishra4@ncsu.edu).
 
 ---
 
