@@ -1,7 +1,6 @@
 
 # **THANOS: The Ultimate Load Balancer**
 
-![THANOS Logo](https://via.placeholder.com/600x200?text=THANOS+Load+Balancer)
 
 **THANOS** is a powerful, feature-rich load balancer built with Golang that uses the **five infinity stones** (metrics) to deliver optimal and dynamic traffic distribution. Inspired by the balance of the universe, THANOS ensures fairness, reliability, and resilience in your distributed systems.
 
@@ -44,7 +43,7 @@
 
 ### Clone the Repository
 ```bash
-git clone https://github.com//thanos-load-balancer.git
+git clone https://github.com/Distributed-Systems-KP/Dynamic_Load_Balancer.git
 cd thanos-load-balancer
 ```
 
@@ -116,7 +115,6 @@ The dashboard visualizes the health of servers based on the infinity stone metri
 - **CPU and Memory Usage**
 - **Response Times and Error Rates**
 
-![Dashboard Preview](https://via.placeholder.com/800x400?text=Dashboard+Preview)
 
 ---
 
@@ -183,7 +181,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## 💬 **Feedback**
 
-Have ideas or suggestions? Open an issue or reach out to us at [your_email@example.com](mailto:your_email@example.com).
+Have ideas or suggestions? Open an issue or reach out to us at [your_email@example.com](mailto:pmishra4@ncsu.edu).
 
 ---
 
