@@ -70,7 +70,7 @@ func (hc *Checker) checkServers() {
 		// Assumes CPU, MEM, Resp, Error are normalized in [0..1]
 		H := alpha*(1-srv.CPUUsage) +
 			beta*(1-srv.MemUsage) +
-			gamma*(1-srv.ResponseTime/500.0) + // Normalize response time (max 500ms)
+			gamma*(1-srv.ResponseTime/500.0) + // Normalizing response time (max 500ms)
 			delta*(1-srv.ErrorRate) +
 			epsilon*boolToFloat64(srv.PingStatus)
 

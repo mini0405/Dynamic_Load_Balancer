@@ -1,0 +1,128 @@
+<!-- internal/dashboard/templates/dashboard.html -->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Load Balancer Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-section">
+                <h1><i class="fas fa-balance-scale"></i> Load Balancer Dashboard</h1>
+            </div>
+            <div class="lb-status">
+                <span id="lb-status-indicator" class="status-indicator online"></span>
+                <span id="lb-status-text">Online</span>
+            </div>
+        </header>
+
+        <div class="dashboard-grid">
+            <div class="control-panel">
+                <div class="panel-header">
+                    <h2><i class="fas fa-sliders-h"></i> Control Panel</h2>
+                </div>
+                <div class="control-section">
+                    <h3>Load Balancing Strategy</h3>
+                    <div class="toggle-group">
+                        <label class="switch-container">
+                            <span class="switch-label">IP Hash</span>
+                            <label class="switch">
+                                <input type="checkbox" id="toggle-ip-hash">
+                                <span class="slider round"></span>
+                            </label>
+                        </label>
+                        <label class="switch-container">
+                            <span class="switch-label">Sticky Sessions</span>
+                            <label class="switch">
+                                <input type="checkbox" id="toggle-sticky-sessions" checked>
+                                <span class="slider round"></span>
+                            </label>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="control-section">
+                    <h3>Test Features</h3>
+                    <div class="button-group">
+                        <button id="btn-generate-traffic" class="btn primary">
+                            <i class="fas fa-play"></i> Generate Traffic
+                        </button>
+                        <button id="btn-stop-traffic" class="btn secondary" disabled>
+                            <i class="fas fa-stop"></i> Stop Traffic
+                        </button>
+                    </div>
+                    <div class="slider-container">
+                        <label for="requests-per-second">
+                            <i class="fas fa-tachometer-alt"></i>
+                            Requests per second: <span id="rps-value">10</span>
+                        </label>
+                        <input type="range" id="requests-per-second" min="1" max="100" value="10">
+                    </div>
+                </div>
+            </div>
+
+            <div class="servers-panel">
+                <div class="panel-header">
+                    <h2><i class="fas fa-server"></i> Server Status</h2>
+                    <div class="panel-actions">
+                        <button id="refresh-servers" class="btn icon-only">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </div>
+                </div>
+                <div id="servers-container" class="servers-grid"></div>
+            </div>
+
+            <div class="chart-box distribution">
+                <div class="panel-header">
+                    <h2><i class="fas fa-chart-bar"></i> Traffic Distribution</h2>
+                </div>
+                <div class="chart-container">
+                    <canvas id="distribution-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-box response">
+                <div class="panel-header">
+                    <h2><i class="fas fa-chart-line"></i> Response Times</h2>
+                </div>
+                <div class="chart-container">
+                    <canvas id="response-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="events-panel">
+                <div class="panel-header">
+                    <h2><i class="fas fa-list-alt"></i> Event Log</h2>
+                    <div class="panel-actions">
+                        <button id="clear-events" class="btn icon-only">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                </div>
+                <div id="events-container"></div>
+            </div>
+        </div>
+
+        <footer>
+            <div class="footer-content">
+                <p>Load Balancer Dashboard © 2025</p>
+                <div class="stats">
+                    <span id="total-requests">Total Requests: 0</span>
+                    <span id="avg-response-time">Avg Response: 0ms</span>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+
+</html>
