@@ -8,6 +8,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const toggleStickySessions = document.getElementById('toggle-sticky-sessions');
     const requestsPerSecond = document.getElementById('requests-per-second');
     const rpsValue = document.getElementById('rps-value');
+    const rpsDialInputs = document.querySelectorAll('input[name="dashboard-rps"]');
+    const rpsDialNeedle = document.querySelector('.rps-dial__needle');
+    const rpsStops = [5, 10, 20, 40, 70, 100];
     const startTrafficBtn = document.getElementById('btn-start-traffic');
     const stopTrafficBtn = document.getElementById('btn-stop-traffic');
     const refreshServersBtn = document.getElementById('refresh-servers');
@@ -37,12 +40,38 @@ document.addEventListener('DOMContentLoaded', function () {
     let isFirstLoad = true;
     let scenarioBusy = false;
     let trafficTimer = null;
+
+    function normalizeRpsValue(raw) {
+        const text = typeof raw === 'number' ? String(raw) : String(raw || '').trim();
+        const matched = rpsStops.find(stop => String(stop) === text);
+        return matched !== undefined ? matched : rpsStops[1];
+    }
+
+    function updateRpsControls(value) {
+        const normalized = normalizeRpsValue(value);
+        const stopIndex = rpsStops.indexOf(normalized);
+
+        if (requestsPerSecond) {
+            requestsPerSecond.value = String(normalized);
+        }
+        if (rpsValue) {
+            rpsValue.textContent = normalized;
+        }
+        if (rpsDialNeedle && stopIndex >= 0) {
+            rpsDialNeedle.style.setProperty('--position', stopIndex);
+        }
+        rpsDialInputs.forEach(input => {
+            input.checked = input.value === String(normalized);
+        });
+    }
+
     if (startTrafficBtn) {
         startTrafficBtn.disabled = true;
     }
     if (stopTrafficBtn) {
         stopTrafficBtn.disabled = true;
     }
+    updateRpsControls(requestsPerSecond ? requestsPerSecond.value : rpsStops[1]);
 
 
 
@@ -75,6 +104,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 servers = data;
                 renderServers();
                 setStatusMessage('Monitoring live traffic');
+                updateRpsControls(requestsPerSecond ? requestsPerSecond.value : rpsStops[1]);
 
                 if (isFirstLoad) {
                     initCharts();
@@ -90,6 +120,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 servers = [];
                 renderServers();
+                updateRpsControls(rpsStops[1]);
 
                 if (trafficTimer) {
                     clearInterval(trafficTimer);
@@ -134,8 +165,11 @@ document.addEventListener('DOMContentLoaded', function () {
             if (stopTrafficBtn) {
                 stopTrafficBtn.disabled = true;
             }
+            updateScenarioAvailability();
             return;
         }
+
+        const hasOnlineServers = servers.some(server => server.PingStatus);
 
         servers.forEach((server, index) => {
             if (!serverRequestCounts.hasOwnProperty(server.ID)) {
@@ -209,14 +243,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 flowNode.innerHTML = `
                     <div class="node-core">${index + 1}</div>
                     <span class="node-label">${server.ID.slice(0, 8)}</span>
-                    <span class="node-meta">${server.PingStatus ? 'Online' : 'Offline'} · ${cbState}</span>
+                    <span class="node-meta">${server.PingStatus ? 'Online' : 'Offline'} | ${cbState}</span>
                 `;
                 flowServersContainer.appendChild(flowNode);
             }
         });
 
         if (startTrafficBtn) {
-            startTrafficBtn.disabled = trafficTimer ? true : servers.length === 0;
+            startTrafficBtn.disabled = trafficTimer ? true : !hasOnlineServers;
         }
         if (stopTrafficBtn) {
             stopTrafficBtn.disabled = !trafficTimer;
@@ -330,8 +364,8 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!btn) {
                 return;
             }
-            const disableFailure = btn === scenarioFailureBtn && !hasOnline;
-            btn.disabled = isBusy || disableFailure;
+            const requiresOnline = btn !== scenarioRecoveryBtn;
+            btn.disabled = isBusy || (requiresOnline && !hasOnline);
             if (isBusy && btn === activeButton) {
                 btn.classList.add('running');
             } else {
@@ -358,7 +392,13 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function runHeavyScenario() {
-        const burst = requestsPerSecond ? parseInt(requestsPerSecond.value, 10) : 10;
+        const hasOnline = servers.some(server => server.PingStatus);
+        if (!hasOnline) {
+            setStatusMessage('No online servers available for heavy load burst');
+            logEvent('Heavy load scenario skipped: no online servers', 'warning');
+            return;
+        }
+        const burst = requestsPerSecond ? normalizeRpsValue(requestsPerSecond.value) : rpsStops[1];
         const clamped = Math.min(Math.max(burst, 5), 60);
         await runTrafficBurst(clamped, 'high');
         setStatusMessage(`Heavy load burst dispatched (${clamped} requests)`);
@@ -366,6 +406,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function runPriorityScenario() {
+        const hasOnline = servers.some(server => server.PingStatus);
+        if (!hasOnline) {
+            setStatusMessage('No online servers available for priority spike');
+            logEvent('Priority scenario skipped: no online servers', 'warning');
+            return;
+        }
         await runTrafficBurst(8, 'critical');
         await runTrafficBurst(6, 'medium');
         setStatusMessage('Priority spike executed');
@@ -373,6 +419,11 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function runRecoveryScenario() {
+        if (!servers || servers.length === 0) {
+            setStatusMessage('No servers registered for recovery sweep');
+            logEvent('Recovery scenario skipped: no servers available', 'warning');
+            return;
+        }
         const actions = servers.map(async server => {
             if (!server.PingStatus) {
                 await fetch(`/api/servers/${server.ID}/toggle`, { method: 'POST' });
@@ -435,11 +486,27 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (requestsPerSecond && rpsValue) {
             requestsPerSecond.addEventListener('input', function () {
-                rpsValue.textContent = this.value;
+                const next = normalizeRpsValue(this.value);
+                updateRpsControls(next);
                 if (trafficTimer) {
                     stopTrafficLoop();
                     startTrafficLoop();
                 }
+            });
+        }
+
+        if (rpsDialInputs && rpsDialInputs.length) {
+            rpsDialInputs.forEach(input => {
+                input.addEventListener('change', function () {
+                    if (this.checked) {
+                        const next = normalizeRpsValue(this.value);
+                        updateRpsControls(next);
+                        if (trafficTimer) {
+                            stopTrafficLoop();
+                            startTrafficLoop();
+                        }
+                    }
+                });
             });
         }
 
@@ -604,12 +671,26 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!servers || servers.length === 0) {
             setStatusMessage('No servers available for traffic generator');
             logEvent('Traffic generator skipped: no servers online', 'warning');
+            if (startTrafficBtn) {
+                startTrafficBtn.disabled = true;
+            }
             return;
         }
 
-        const requested = requestsPerSecond ? parseInt(requestsPerSecond.value || '10', 10) : 10;
+        const hasOnlineServers = servers.some(server => server.PingStatus);
+        if (!hasOnlineServers) {
+            setStatusMessage('No online servers available for traffic generator');
+            logEvent('Traffic generator skipped: no online servers', 'warning');
+            if (startTrafficBtn) {
+                startTrafficBtn.disabled = true;
+            }
+            return;
+        }
+
+        const requested = requestsPerSecond ? normalizeRpsValue(requestsPerSecond.value) : rpsStops[1];
         const clamped = Math.max(1, requested);
         const interval = Math.max(1000 / clamped, 75);
+        updateRpsControls(clamped);
 
         trafficTimer = setInterval(() => {
             sendTestRequest().catch(() => {});
@@ -635,7 +716,8 @@ document.addEventListener('DOMContentLoaded', function () {
         trafficTimer = null;
 
         if (startTrafficBtn) {
-            startTrafficBtn.disabled = false;
+            const hasOnlineServers = servers.some(server => server.PingStatus);
+            startTrafficBtn.disabled = !hasOnlineServers;
         }
         if (stopTrafficBtn) {
             stopTrafficBtn.disabled = true;

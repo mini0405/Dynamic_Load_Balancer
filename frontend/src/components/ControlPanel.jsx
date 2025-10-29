@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import AddServerForm from './AddServerForm';
+import RpsDial from './RpsDial';
 
 const SCENARIO_LABELS = {
     failure: 'Trigger Failure',
@@ -25,6 +26,8 @@ const ControlPanel = ({ servers, onScenarioComplete, onRefreshConfig, onServerAd
 
     const trafficTimerRef = useRef(null);
     const priorityRef = useRef(priority);
+    const hasServers = Array.isArray(servers) && servers.length > 0;
+    const hasOnlineServers = hasServers && servers.some((srv) => srv.PingStatus);
 
     useEffect(() => {
         priorityRef.current = priority;
@@ -82,7 +85,7 @@ const ControlPanel = ({ servers, onScenarioComplete, onRefreshConfig, onServerAd
         if (!trafficTimerRef.current) {
             return;
         }
-        if (!servers || servers.length === 0) {
+        if (!servers || servers.length === 0 || !servers.some((srv) => srv.PingStatus)) {
             stopTraffic();
             return;
         }
@@ -101,6 +104,10 @@ const ControlPanel = ({ servers, onScenarioComplete, onRefreshConfig, onServerAd
         }
         if (!servers || servers.length === 0) {
             notifyStatus('No servers available for traffic generator');
+            return;
+        }
+        if (!servers.some((srv) => srv.PingStatus)) {
+            notifyStatus('No online servers available for traffic generator');
             return;
         }
         const clamped = Math.max(1, trafficRate);
@@ -128,14 +135,29 @@ const ControlPanel = ({ servers, onScenarioComplete, onRefreshConfig, onServerAd
     };
 
     useEffect(() => {
-        if (trafficActive && servers.length === 0) {
-            stopTraffic();
-            notifyStatus('No servers available for traffic generator');
+        if (!trafficActive) {
+            return;
         }
-    }, [servers.length, trafficActive]);
+        const online = Array.isArray(servers) && servers.some((srv) => srv.PingStatus);
+        if (!online) {
+            stopTraffic();
+            notifyStatus('No online servers available for traffic generator');
+        }
+    }, [servers, trafficActive]);
 
     const runScenario = async (scenario) => {
         if (busyScenario) return;
+
+        if (!servers || servers.length === 0) {
+            notifyStatus('No servers to test');
+            return;
+        }
+        const onlineServers = servers.filter((srv) => srv.PingStatus);
+        if (scenario !== 'recovery' && onlineServers.length === 0) {
+            notifyStatus('No online servers available for this scenario');
+            return;
+        }
+
         setBusyScenario(scenario);
         const label = SCENARIO_LABELS[scenario] || 'Scenario';
         notifyStatus(`${label} running...`);
@@ -143,11 +165,7 @@ const ControlPanel = ({ servers, onScenarioComplete, onRefreshConfig, onServerAd
         try {
             switch (scenario) {
                 case 'failure': {
-                    if (servers.length === 0) {
-                        notifyStatus('No servers available for failure drill');
-                        break;
-                    }
-                    const target = servers.find((srv) => srv.PingStatus) || servers[0];
+                    const target = onlineServers[0];
                     await fetch(`/api/servers/${target.ID}/toggle`, { method: 'POST' });
                     break;
                 }
@@ -222,23 +240,19 @@ const ControlPanel = ({ servers, onScenarioComplete, onRefreshConfig, onServerAd
                             ))}
                         </select>
                     </label>
-                    <label className="switch-row">
-                        <span className="switch-label">Traffic Rate</span>
-                        <input
-                            type="range"
-                            min="1"
-                            max="100"
-                            value={trafficRate}
-                            onChange={(e) => handleRateChange(parseInt(e.target.value, 10))}
-                        />
-                        <span className="switch-value">{trafficRate} rps</span>
-                    </label>
+                </div>
+                <div className="dial-stack">
+                    <RpsDial value={trafficRate} onChange={handleRateChange} />
+                    <div className="dial-readout">
+                        <span className="dial-title">Requests / Second</span>
+                        <span className="dial-value">{trafficRate}</span>
+                    </div>
                 </div>
                 <div className="scenario-column">
                     <button
                         className={`scenario-button ${trafficActive ? 'running' : ''}`}
                         onClick={startTraffic}
-                        disabled={trafficActive || servers.length === 0}
+                        disabled={trafficActive || !hasOnlineServers}
                     >
                         Start Traffic
                     </button>
@@ -262,7 +276,8 @@ const ControlPanel = ({ servers, onScenarioComplete, onRefreshConfig, onServerAd
                             onClick={() => runScenario(key)}
                             disabled={
                                 !!busyScenario ||
-                                (key === 'failure' && servers.length === 0)
+                                !hasServers ||
+                                (key !== 'recovery' && !hasOnlineServers)
                             }
                         >
                             {label}

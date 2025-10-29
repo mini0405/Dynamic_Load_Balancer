@@ -17,7 +17,7 @@
             <div class="identity-block">
                 <h1>Minentle Stuurman</h1>
                 <p>Student Number: 222392436</p>
-                <span class="identity-meta">Module: Industrial Computing Design Project · Supervisor: Vusumuzi Moyo</span>
+                <span class="identity-meta">Module: Industrial Computing Design Project | Supervisor: Vusumuzi Moyo</span>
             </div>
             <div class="status-block">
                 <div class="lb-status">
@@ -63,13 +63,36 @@
                             <i class="fas fa-stop"></i> Stop Traffic
                         </button>
                     </div>
-                    <div class="slider-container">
-                        <label for="requests-per-second">
-                            <i class="fas fa-tachometer-alt"></i>
-                            Requests per second: <span id="rps-value">10</span>
-                        </label>
-                        <input type="range" id="requests-per-second" min="1" max="100" value="10">
+                <div class="rps-dial-group">
+                    <div class="rps-dial-label">
+                        <i class="fas fa-tachometer-alt"></i>
+                        Requests per second: <span id="rps-value">10</span>
                     </div>
+                    <div class="rps-dial">
+                        <input type="radio" id="dashboard-rps-5" name="dashboard-rps" value="5">
+                        <label for="dashboard-rps-5" style="--index: 1"></label>
+                        <input type="radio" id="dashboard-rps-10" name="dashboard-rps" value="10" checked>
+                        <label for="dashboard-rps-10" style="--index: 2"></label>
+                        <input type="radio" id="dashboard-rps-20" name="dashboard-rps" value="20">
+                        <label for="dashboard-rps-20" style="--index: 3"></label>
+                        <input type="radio" id="dashboard-rps-40" name="dashboard-rps" value="40">
+                        <label for="dashboard-rps-40" style="--index: 4"></label>
+                        <input type="radio" id="dashboard-rps-70" name="dashboard-rps" value="70">
+                        <label for="dashboard-rps-70" style="--index: 5"></label>
+                        <input type="radio" id="dashboard-rps-100" name="dashboard-rps" value="100">
+                        <label for="dashboard-rps-100" style="--index: 6"></label>
+                        <div class="rps-dial__needle" style="--position: 1"></div>
+                        <div class="rps-dial__notches">
+                            <div class="rps-dial__notch" style="--index: 1"><span>5</span></div>
+                            <div class="rps-dial__notch" style="--index: 2"><span>10</span></div>
+                            <div class="rps-dial__notch" style="--index: 3"><span>20</span></div>
+                            <div class="rps-dial__notch" style="--index: 4"><span>40</span></div>
+                            <div class="rps-dial__notch" style="--index: 5"><span>70</span></div>
+                            <div class="rps-dial__notch" style="--index: 6"><span>100</span></div>
+                        </div>
+                    </div>
+                    <input type="hidden" id="requests-per-second" value="10">
+                </div>
                 </div>
 
                 <div class="control-section">
@@ -156,7 +179,7 @@
 
         <footer>
             <div class="footer-content">
-                <p>Load Balancer Dashboard © 2025</p>
+                <p>Load Balancer Dashboard (c) 2025</p>
                 <div class="stats">
                     <span id="total-requests">Total Requests: 0</span>
                     <span id="avg-response-time">Avg Response: 0ms</span>
