@@ -13,13 +13,18 @@
 
 <body>
     <div class="container">
-        <header>
-            <div class="logo-section">
-                <h1><i class="fas fa-balance-scale"></i> Load Balancer Dashboard</h1>
+        <header class="hero-header">
+            <div class="identity-block">
+                <h1>Minentle Stuurman</h1>
+                <p>Student Number: 222392436</p>
+                <span class="identity-meta">Module: Industrial Computing Design Project · Supervisor: Vusumuzi Moyo</span>
             </div>
-            <div class="lb-status">
-                <span id="lb-status-indicator" class="status-indicator online"></span>
-                <span id="lb-status-text">Online</span>
+            <div class="status-block">
+                <div class="lb-status">
+                    <span id="lb-status-indicator" class="status-indicator online"></span>
+                    <span id="lb-status-text">Online</span>
+                </div>
+                <p id="hero-status-message">Monitoring live traffic</p>
             </div>
         </header>
 
@@ -49,10 +54,10 @@
                 </div>
 
                 <div class="control-section">
-                    <h3>Test Features</h3>
-                    <div class="button-group">
-                        <button id="btn-generate-traffic" class="btn primary">
-                            <i class="fas fa-play"></i> Generate Traffic
+                    <h3>Traffic Driver</h3>
+                    <div class="scenario-stack">
+                        <button id="btn-start-traffic" class="btn primary">
+                            <i class="fas fa-play"></i> Start Traffic
                         </button>
                         <button id="btn-stop-traffic" class="btn secondary" disabled>
                             <i class="fas fa-stop"></i> Stop Traffic
@@ -64,6 +69,24 @@
                             Requests per second: <span id="rps-value">10</span>
                         </label>
                         <input type="range" id="requests-per-second" min="1" max="100" value="10">
+                    </div>
+                </div>
+
+                <div class="control-section">
+                    <h3>Scenario Lab</h3>
+                    <div class="scenario-stack">
+                        <button id="scenario-failure" class="btn primary scenario-btn">
+                            <i class="fas fa-skull-crossbones"></i> Failure Drill
+                        </button>
+                        <button id="scenario-heavy" class="btn primary scenario-btn">
+                            <i class="fas fa-weight-hanging"></i> Heavy Load Burst
+                        </button>
+                        <button id="scenario-priority" class="btn primary scenario-btn">
+                            <i class="fas fa-bolt"></i> Priority Spike
+                        </button>
+                        <button id="scenario-recovery" class="btn secondary scenario-btn">
+                            <i class="fas fa-life-ring"></i> Recovery Sweep
+                        </button>
                     </div>
                 </div>
             </div>
@@ -78,6 +101,26 @@
                     </div>
                 </div>
                 <div id="servers-container" class="servers-grid"></div>
+            </div>
+
+            <div class="chart-box flow-panel">
+                <div class="panel-header">
+                    <h2><i class="fas fa-project-diagram"></i> Traffic Flow</h2>
+                </div>
+                <div id="flow-visual" class="flow-visual">
+                    <div class="flow-balancer">
+                        <span class="flow-node">LB</span>
+                        <p>Balancer Core</p>
+                    </div>
+                    <div id="flow-servers" class="flow-servers"></div>
+                    <div id="flow-particles" class="flow-particles"></div>
+                </div>
+                <div class="flow-legend">
+                    <span><span class="flow-swatch dispatch"></span> Dispatch</span>
+                    <span><span class="flow-swatch success"></span> Completed</span>
+                    <span><span class="flow-swatch reroute"></span> Rerouted</span>
+                    <span><span class="flow-swatch failure"></span> Failed</span>
+                </div>
             </div>
 
             <div class="chart-box distribution">

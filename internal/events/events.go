@@ -17,6 +17,7 @@ const (
 	SuccessEvent EventType = "success"
 	WarningEvent EventType = "warning"
 	ErrorEvent   EventType = "error"
+	PacketEvent  EventType = "packet"
 )
 
 // Event represents a system event
@@ -82,14 +83,16 @@ func (es *EventSystem) Publish(eventType EventType, message string) {
 	}
 
 	// Store event in history
-	es.eventsMutex.Lock()
-	if len(es.events) >= es.maxEvents {
-		// Remove oldest event
-		es.events = append(es.events[1:], event)
-	} else {
-		es.events = append(es.events, event)
+	if eventType != PacketEvent {
+		es.eventsMutex.Lock()
+		if len(es.events) >= es.maxEvents {
+			// Remove oldest event
+			es.events = append(es.events[1:], event)
+		} else {
+			es.events = append(es.events, event)
+		}
+		es.eventsMutex.Unlock()
 	}
-	es.eventsMutex.Unlock()
 
 	// Marshal event to JSON
 	eventJSON, err := json.Marshal(event)

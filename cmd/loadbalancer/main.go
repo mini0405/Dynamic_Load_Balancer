@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -80,17 +81,7 @@ func main() {
 			r.URL.Path = "/"
 		}
 
-		// Picking up a server via balancer
-		chosenSrv := balancer.PickServer(r)
-		if chosenSrv == nil {
-			// No available server
-			eventSystem.Publish(events.ErrorEvent, "Request failed: No healthy servers available")
-			http.Error(w, "Service Unavailable (no healthy servers)", http.StatusServiceUnavailable)
-			return
-		}
-
-		// Forward request to chosen server
-		proxyRequest(chosenSrv, w, r, cbCoordinator, metricsManager, eventSystem)
+		handleLoadBalancedRequest(balancer, w, r, cbCoordinator, metricsManager, eventSystem)
 	})
 
 	// 9b. Setup the dashboard API endpoints
@@ -188,71 +179,209 @@ func initServerManager(cfg *config.Config) *server.Manager {
 	return server.NewManager(servers)
 }
 
-// proxyRequest forwards a request to the chosen server.
-func proxyRequest(srv *server.Server, w http.ResponseWriter, r *http.Request,
+func handleLoadBalancedRequest(balancer *lb.Balancer, w http.ResponseWriter, r *http.Request,
 	cbc *lb.CircuitBreakerCoordinator, mm *metrics.MetricsManager, es *events.EventSystem) {
 
-	startTime := time.Now()
-
-	// Building the destination URL
-	url := fmt.Sprintf("http://%s:%d%s", srv.Address, srv.Port, r.URL.Path)
-
-	// Create a new HTTP request
-	req, err := http.NewRequest(r.Method, url, r.Body)
-	if err != nil {
-		cbc.RecordFailure(srv)
-		mm.RecordRequest(srv.ID, 0, true)
-		es.Publish(events.ErrorEvent, fmt.Sprintf("Bad request to backend server %s: %v", srv.ID, err))
-		http.Error(w, "Bad request to backend", http.StatusBadGateway)
+	totalServers := len(balancer.ServerManager.GetAllServers())
+	if totalServers == 0 {
+		es.Publish(events.ErrorEvent, "Request failed: No backend servers registered")
+		http.Error(w, "Service Unavailable (no backend servers)", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Copy headers from the original request
-	for k, vv := range r.Header {
+	priority := lb.ExtractPriority(r)
+	requestID := mm.GeneratePacketID()
+	attempted := make(map[string]bool, totalServers)
+
+	var bodyBytes []byte
+	if r.Body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(r.Body)
+		if err != nil {
+			es.Publish(events.ErrorEvent, fmt.Sprintf("Failed to read request body: %v", err))
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	}
+
+	var lastErr error
+
+	for attempt := 0; attempt < totalServers; attempt++ {
+		srv := balancer.PickServerWithExclude(r, attempted)
+		if srv == nil {
+			break
+		}
+		attempted[srv.ID] = true
+
+		active := server.BeginRequest(srv)
+		dispatchEvent := metrics.PacketEvent{
+			RequestID:      requestID,
+			Attempt:        attempt + 1,
+			Priority:       priority,
+			ServerID:       srv.ID,
+			ServerAddress:  fmt.Sprintf("%s:%d", srv.Address, srv.Port),
+			Status:         "dispatch",
+			Timestamp:      time.Now(),
+			ActiveRequests: active,
+		}
+		mm.RecordAndBroadcastPacketEvent(es, dispatchEvent)
+
+		if active > lb.BusyThreshold {
+			activeAfter := server.EndRequest(srv)
+			rerouteEvent := dispatchEvent
+			rerouteEvent.Status = "rerouted"
+			rerouteEvent.Reason = "busy"
+			rerouteEvent.Timestamp = time.Now()
+			rerouteEvent.ActiveRequests = activeAfter
+			mm.RecordAndBroadcastPacketEvent(es, rerouteEvent)
+
+			es.Publish(events.WarningEvent, fmt.Sprintf("Server %s busy; rerouting request %s", srv.ID, requestID))
+			continue
+		}
+
+		start := time.Now()
+		result, err := forwardToBackend(srv, r, bodyBytes)
+		duration := time.Since(start)
+		responseMs := float64(duration.Milliseconds())
+
+		if err != nil {
+			activeAfter := server.EndRequest(srv)
+			cbc.RecordFailure(srv)
+			mm.RecordRequest(srv.ID, responseMs, true)
+
+			failureEvent := metrics.PacketEvent{
+				RequestID:      requestID,
+				Attempt:        attempt + 1,
+				Priority:       priority,
+				ServerID:       srv.ID,
+				ServerAddress:  fmt.Sprintf("%s:%d", srv.Address, srv.Port),
+				Status:         "failed",
+				Reason:         err.Error(),
+				Timestamp:      time.Now(),
+				ResponseTime:   responseMs,
+				ActiveRequests: activeAfter,
+			}
+			mm.RecordAndBroadcastPacketEvent(es, failureEvent)
+			es.Publish(events.ErrorEvent, fmt.Sprintf("Request to %s failed: %v", srv.ID, err))
+
+			lastErr = err
+			continue
+		}
+
+		if result.StatusCode >= http.StatusInternalServerError {
+			activeAfter := server.EndRequest(srv)
+			cbc.RecordFailure(srv)
+			mm.RecordRequest(srv.ID, responseMs, true)
+
+			failureEvent := metrics.PacketEvent{
+				RequestID:      requestID,
+				Attempt:        attempt + 1,
+				Priority:       priority,
+				ServerID:       srv.ID,
+				ServerAddress:  fmt.Sprintf("%s:%d", srv.Address, srv.Port),
+				Status:         "failed",
+				Reason:         fmt.Sprintf("status %d", result.StatusCode),
+				Timestamp:      time.Now(),
+				ResponseTime:   responseMs,
+				ActiveRequests: activeAfter,
+			}
+			mm.RecordAndBroadcastPacketEvent(es, failureEvent)
+			es.Publish(events.WarningEvent, fmt.Sprintf("Request to %s returned status %d", srv.ID, result.StatusCode))
+
+			lastErr = fmt.Errorf("backend status %d", result.StatusCode)
+			continue
+		}
+
+		cbc.RecordSuccess(srv)
+		mm.RecordRequest(srv.ID, responseMs, false)
+		activeAfter := server.EndRequest(srv)
+
+		successEvent := metrics.PacketEvent{
+			RequestID:      requestID,
+			Attempt:        attempt + 1,
+			Priority:       priority,
+			ServerID:       srv.ID,
+			ServerAddress:  fmt.Sprintf("%s:%d", srv.Address, srv.Port),
+			Status:         "completed",
+			Timestamp:      time.Now(),
+			ResponseTime:   responseMs,
+			ActiveRequests: activeAfter,
+		}
+		mm.RecordAndBroadcastPacketEvent(es, successEvent)
+
+		es.Publish(events.InfoEvent, fmt.Sprintf("Request %s served by %s in %.0fms", requestID, srv.ID, responseMs))
+
+		writeBackendResponse(w, result)
+		return
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no healthy downstream servers")
+	}
+	es.Publish(events.ErrorEvent, fmt.Sprintf("Request %s failed: %v", requestID, lastErr))
+	http.Error(w, "Service Unavailable (no healthy servers)", http.StatusServiceUnavailable)
+}
+
+type backendResult struct {
+	StatusCode int
+	Header     http.Header
+	Body       []byte
+}
+
+func forwardToBackend(srv *server.Server, original *http.Request, body []byte) (*backendResult, error) {
+	url := fmt.Sprintf("http://%s:%d%s", srv.Address, srv.Port, original.URL.Path)
+	if raw := original.URL.RawQuery; raw != "" {
+		url = url + "?" + raw
+	}
+
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(original.Context(), original.Method, url, reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	for k, vv := range original.Header {
 		for _, v := range vv {
-			req.Header.Add(k, v)
+			req.Header.Set(k, v)
 		}
 	}
 
-	// Create an HTTP client with timeout
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		cbc.RecordFailure(srv)
-		responseTime := time.Since(startTime).Milliseconds()
-		mm.RecordRequest(srv.ID, float64(responseTime), true)
-		es.Publish(events.ErrorEvent, fmt.Sprintf("Request to %s failed: %v", srv.ID, err))
-		http.Error(w, "Backend request failed", http.StatusBadGateway)
-		return
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	// Mark success in circuit breaker
-	cbc.RecordSuccess(srv)
-
-	// Record metrics
-	responseTime := time.Since(startTime).Milliseconds()
-	mm.RecordRequest(srv.ID, float64(responseTime), resp.StatusCode >= 500)
-
-	// Log successful request
-	if resp.StatusCode < 400 {
-		es.Publish(events.InfoEvent, fmt.Sprintf("Request to %s completed in %dms",
-			srv.ID, responseTime))
-	} else {
-		es.Publish(events.WarningEvent, fmt.Sprintf("Request to %s returned status %d",
-			srv.ID, resp.StatusCode))
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 
-	// Copy response headers
-	for k, vv := range resp.Header {
+	return &backendResult{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header.Clone(),
+		Body:       respBody,
+	}, nil
+}
+
+func writeBackendResponse(w http.ResponseWriter, result *backendResult) {
+	for k, vv := range result.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
 	}
-	w.WriteHeader(resp.StatusCode)
 
-	// Copy response body
-	if _, copyErr := io.Copy(w, resp.Body); copyErr != nil {
-		log.Printf("Error copying response body: %v", copyErr)
+	w.WriteHeader(result.StatusCode)
+	if len(result.Body) == 0 {
+		return
+	}
+	if _, err := w.Write(result.Body); err != nil {
+		log.Printf("Error writing response body: %v", err)
 	}
 }

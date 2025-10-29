@@ -3,10 +3,13 @@ package metrics
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"load-balancer/internal/events"
 	"load-balancer/internal/server"
 )
 
@@ -42,6 +45,11 @@ type MetricsManager struct {
 
 	// Circular buffer settings for response time history
 	maxHistoryPoints int
+
+	// Packet flow tracking
+	packetHistory    []PacketEvent
+	maxPacketHistory int
+	packetCounter    uint64
 }
 
 // NewMetricsManager creates a new metrics manager
@@ -54,6 +62,9 @@ func NewMetricsManager(srvMgr *server.Manager) *MetricsManager {
 		},
 		ServerManager:    srvMgr,
 		maxHistoryPoints: 100, // Keep last 100 data points for response time
+		packetHistory:    make([]PacketEvent, 0, 200),
+		maxPacketHistory: 200, // Track last 200 packet events
+		packetCounter:    0,
 	}
 }
 
@@ -109,6 +120,72 @@ func (mm *MetricsManager) RecordRequest(serverID string, responseTime float64, i
 		// Update error rate
 		mm.Metrics.ErrorRate = float64(len(mm.Metrics.LastErrors)) / float64(mm.maxHistoryPoints)
 	}
+}
+
+// PacketEvent captures the lifecycle of a request being routed through the balancer.
+type PacketEvent struct {
+	RequestID      string    `json:"requestId"`
+	Attempt        int       `json:"attempt"`
+	Priority       string    `json:"priority"`
+	ServerID       string    `json:"serverId"`
+	ServerAddress  string    `json:"serverAddress"`
+	Status         string    `json:"status"`
+	Reason         string    `json:"reason,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
+	ResponseTime   float64   `json:"responseTime,omitempty"`
+	ActiveRequests int64     `json:"activeRequests"`
+}
+
+// GeneratePacketID returns a unique identifier for a routed request.
+func (mm *MetricsManager) GeneratePacketID() string {
+	id := atomic.AddUint64(&mm.packetCounter, 1)
+	return fmt.Sprintf("pkt-%d", id)
+}
+
+// RecordPacketEvent stores a packet event in the rolling history.
+func (mm *MetricsManager) RecordPacketEvent(evt PacketEvent) {
+	mm.mutex.Lock()
+	defer mm.mutex.Unlock()
+
+	if len(mm.packetHistory) >= mm.maxPacketHistory {
+		mm.packetHistory = append(mm.packetHistory[1:], evt)
+	} else {
+		mm.packetHistory = append(mm.packetHistory, evt)
+	}
+}
+
+// RecordAndBroadcastPacketEvent stores the event and pushes it to subscribers via the event system.
+func (mm *MetricsManager) RecordAndBroadcastPacketEvent(es *events.EventSystem, evt PacketEvent) {
+	mm.RecordPacketEvent(evt)
+
+	if es == nil {
+		return
+	}
+
+	payload, err := json.Marshal(evt)
+	if err != nil {
+		return
+	}
+	es.Publish(events.PacketEvent, string(payload))
+}
+
+// GetPacketHistory returns the most recent packet events up to the requested limit.
+func (mm *MetricsManager) GetPacketHistory(limit int) []PacketEvent {
+	mm.mutex.RLock()
+	defer mm.mutex.RUnlock()
+
+	if limit <= 0 || limit > len(mm.packetHistory) {
+		limit = len(mm.packetHistory)
+	}
+
+	start := len(mm.packetHistory) - limit
+	if start < 0 {
+		start = 0
+	}
+
+	result := make([]PacketEvent, len(mm.packetHistory[start:]))
+	copy(result, mm.packetHistory[start:])
+	return result
 }
 
 // Handler returns an HTTP handler for serving metrics

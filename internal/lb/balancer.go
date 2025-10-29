@@ -8,6 +8,8 @@ import (
 	"sync"
 )
 
+const BusyThreshold int64 = 5
+
 // Balancer orchestrates the load-balancing process.
 type Balancer struct {
 	mu               sync.Mutex
@@ -32,6 +34,15 @@ func NewBalancer(mgr *server.Manager, wrr *WeightedRoundRobin, ipHash *IPHash, s
 
 // PickServer chooses which server should handle the request.
 func (b *Balancer) PickServer(r *http.Request) *server.Server {
+	return b.pickServerInternal(r, nil)
+}
+
+// PickServerWithExclude chooses a server while excluding any IDs present in the provided map.
+func (b *Balancer) PickServerWithExclude(r *http.Request, exclude map[string]bool) *server.Server {
+	return b.pickServerInternal(r, exclude)
+}
+
+func (b *Balancer) pickServerInternal(r *http.Request, exclude map[string]bool) *server.Server {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -41,7 +52,9 @@ func (b *Balancer) PickServer(r *http.Request) *server.Server {
 		if srv := b.StickySessionMgr.GetServerForSession(sessionID); srv != nil {
 			// If the sticky server is healthy (Closed), return it.
 			if srv.CircuitBreakerState == server.CBStateClosed {
-				return srv
+				if exclude == nil || !exclude[srv.ID] {
+					return srv
+				}
 			}
 		}
 	}
@@ -52,16 +65,18 @@ func (b *Balancer) PickServer(r *http.Request) *server.Server {
 		if srv := b.IPHasher.GetServerForIP(clientIP); srv != nil {
 			// If the IP-hashed server is healthy, bind session (if using sticky)
 			if srv.CircuitBreakerState == server.CBStateClosed {
-				if b.UseStickySessions && sessionID != "" {
-					b.StickySessionMgr.BindSessionToServer(sessionID, srv)
+				if exclude == nil || !exclude[srv.ID] {
+					if b.UseStickySessions && sessionID != "" {
+						b.StickySessionMgr.BindSessionToServer(sessionID, srv)
+					}
+					return srv
 				}
-				return srv
 			}
 		}
 	}
 
 	// 3. Fallback to Weighted Round Robin
-	chosen := b.WRR.PickServer()
+	chosen := b.WRR.PickServer(exclude)
 	if chosen == nil {
 		// All servers might be in Open state or no servers exist
 		return nil

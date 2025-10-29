@@ -113,6 +113,11 @@ func LoadConfig() (*Config, error) {
 				Address: "localhost",
 				Port:    9002,
 			},
+			{
+				ID:      "server-3",
+				Address: "localhost",
+				Port:    9003,
+			},
 			// Add more servers if needed
 		},
 	}

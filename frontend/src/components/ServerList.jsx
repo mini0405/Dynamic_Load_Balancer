@@ -1,51 +1,56 @@
 import React from 'react';
 
-const ServerList = ({ servers }) => {
-    const simulateFailure = async (serverId) => {
-        try {
-            await fetch('http://localhost:8080/api/servers/simulate-failure', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ server_id: serverId }),
-            });
-        } catch (error) {
-            console.error('Error simulating failure:', error);
-        }
-    };
-
+const ServerList = ({ servers, onToggleServer, onResetServer }) => {
     return (
-        <div className="server-list">
-            <h2>Servers</h2>
+        <div className="server-list panel">
+            <h2>Server Fabric</h2>
             <table>
                 <thead>
                     <tr>
                         <th>ID</th>
-                        <th>Address</th>
-                        <th>Status</th>
-                        <th>Failures</th>
-                        <th>Actions</th>
+                        <th>Endpoint</th>
+                        <th>Health</th>
+                        <th>Active</th>
+                        <th>Breaker</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody>
+                    {servers.length === 0 && (
+                        <tr className="empty-row">
+                            <td colSpan="6">No servers registered</td>
+                        </tr>
+                    )}
                     {servers.map(server => (
                         <tr key={server.ID}>
-                            <td>{server.ID.slice(0, 6)}</td>
-                            <td>{server.Address}:{server.Port}</td>
+                            <td>{server.ID.slice(0, 8)}</td>
+                            <td className="server-endpoint">{server.Address}:{server.Port}</td>
+                            <td>
+                                <span className={`status-chip ${server.PingStatus ? 'online' : 'offline'}`}>
+                                    {server.PingStatus ? 'Online' : 'Offline'}
+                                </span>
+                            </td>
+                            <td>{server.ActiveRequests || 0}</td>
                             <td>
                                 <span className={`status ${server.CircuitBreakerState === 0 ? 'healthy' : 'unhealthy'}`}>
                                     {['Closed', 'Open', 'Half-Open'][server.CircuitBreakerState]}
                                 </span>
                             </td>
-                            <td>{server.FailureCount}</td>
                             <td>
-                                <button 
-                                    onClick={() => simulateFailure(server.ID)}
-                                    disabled={server.CircuitBreakerState !== 0}
-                                >
-                                    Simulate Failure
-                                </button>
+                                <div className="server-actions-inline">
+                                    <button
+                                        className="cyber-button ghost"
+                                        onClick={() => onToggleServer(server)}
+                                    >
+                                        {server.PingStatus ? 'Disable' : 'Enable'}
+                                    </button>
+                                    <button
+                                        className="cyber-button ghost"
+                                        onClick={() => onResetServer(server)}
+                                    >
+                                        Reset
+                                    </button>
+                                </div>
                             </td>
                         </tr>
                     ))}

@@ -4,7 +4,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
+	"strconv"
 	"time"
 
 	"load-balancer/internal/events"
@@ -64,6 +66,9 @@ func (api *API) RegisterHandlers(mux *http.ServeMux) {
 
 	// Test endpoint
 	mux.HandleFunc("/api/test", api.handleTest)
+
+	// Packet flow endpoint
+	mux.HandleFunc("/api/packets", api.getPackets)
 
 	// Metrics endpoint (enhanced)
 	mux.HandleFunc("/api/metrics", api.MetricsManager.Handler())
@@ -139,22 +144,35 @@ func (api *API) toggleServer(w http.ResponseWriter, r *http.Request, srv *server
 		return
 	}
 
-	// Toggle the server's status
+	wasEnabled := srv.PingStatus
 	srv.PingStatus = !srv.PingStatus
 
-	// If enabling, reset the circuit breaker state
-	if srv.PingStatus && srv.CircuitBreakerState != server.CBStateClosed {
+	if srv.PingStatus {
+		// Restoring connectivity: close breaker and reset counters
 		srv.CircuitBreakerState = server.CBStateClosed
 		srv.FailureCount = 0
 		srv.TrialSuccessCount = 0
+	} else {
+		// Disabling the server: trip breaker so it is skipped by balancer
+		srv.CircuitBreakerState = server.CBStateOpen
+		srv.OpenSince = time.Now()
+		srv.FailureCount = 0
+		srv.TrialSuccessCount = 0
+		for server.GetActiveRequests(srv) > 0 {
+			server.EndRequest(srv)
+		}
 	}
 
-	// Send event notification
-	eventType := events.SuccessEvent
 	statusText := "enabled"
+	eventType := events.SuccessEvent
 	if !srv.PingStatus {
-		eventType = events.WarningEvent
 		statusText = "disabled"
+		eventType = events.WarningEvent
+	}
+
+	if wasEnabled == srv.PingStatus {
+		statusText = "unchanged"
+		eventType = events.InfoEvent
 	}
 
 	api.EventSystem.Publish(eventType, fmt.Sprintf("Server %s %s", srv.ID, statusText))
@@ -179,6 +197,10 @@ func (api *API) resetServer(w http.ResponseWriter, r *http.Request, srv *server.
 	srv.CircuitBreakerState = server.CBStateClosed
 	srv.FailureCount = 0
 	srv.TrialSuccessCount = 0
+	srv.PingStatus = true
+	for server.GetActiveRequests(srv) > 0 {
+		server.EndRequest(srv)
+	}
 
 	// Send event notification
 	api.EventSystem.Publish(events.InfoEvent, fmt.Sprintf("Server %s circuit breaker reset", srv.ID))
@@ -187,6 +209,30 @@ func (api *API) resetServer(w http.ResponseWriter, r *http.Request, srv *server.
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "reset",
 		"id":     srv.ID,
+	})
+}
+
+// getPackets returns the recent packet flow events for visualization.
+func (api *API) getPackets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	limit := 100
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	events := api.MetricsManager.GetPacketHistory(limit)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Events []metrics.PacketEvent `json:"events"`
+	}{
+		Events: events,
 	})
 }
 
@@ -224,37 +270,116 @@ func (api *API) handleTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use the balancer to pick a server
-	srv := api.Balancer.PickServer(r)
-	if srv == nil {
+	totalServers := len(api.ServerManager.GetAllServers())
+	if totalServers == 0 {
 		http.Error(w, "No server available", http.StatusServiceUnavailable)
-		api.EventSystem.Publish(events.ErrorEvent, "Test request failed: No server available")
+		api.EventSystem.Publish(events.ErrorEvent, "Test request failed: no servers registered")
 		return
 	}
 
-	// Simulate a response from the server
-	startTime := time.Now()
+	priority := lb.ExtractPriority(r)
+	requestID := api.MetricsManager.GeneratePacketID()
+	attempted := make(map[string]bool, totalServers)
+	var lastErr error
 
-	// Simulate some processing time
-	time.Sleep(time.Duration(srv.ResponseTime) * time.Millisecond / 10) // Reduce actual wait time
+	for attempt := 0; attempt < totalServers; attempt++ {
+		srv := api.Balancer.PickServerWithExclude(r, attempted)
+		if srv == nil {
+			break
+		}
+		attempted[srv.ID] = true
 
-	// Record success for the server's circuit breaker
-	api.CircuitBreaker.RecordSuccess(srv)
+		active := server.BeginRequest(srv)
+		dispatchEvent := metrics.PacketEvent{
+			RequestID:      requestID,
+			Attempt:        attempt + 1,
+			Priority:       priority,
+			ServerID:       srv.ID,
+			ServerAddress:  fmt.Sprintf("%s:%d", srv.Address, srv.Port),
+			Status:         "dispatch",
+			Timestamp:      time.Now(),
+			ActiveRequests: active,
+		}
+		api.MetricsManager.RecordAndBroadcastPacketEvent(api.EventSystem, dispatchEvent)
 
-	// Calculate response time
-	responseTime := int(time.Since(startTime).Milliseconds())
+		if active > lb.BusyThreshold {
+			activeAfter := server.EndRequest(srv)
+			rerouteEvent := dispatchEvent
+			rerouteEvent.Status = "rerouted"
+			rerouteEvent.Reason = "busy"
+			rerouteEvent.Timestamp = time.Now()
+			rerouteEvent.ActiveRequests = activeAfter
+			api.MetricsManager.RecordAndBroadcastPacketEvent(api.EventSystem, rerouteEvent)
+			continue
+		}
 
-	// Record metrics
-	api.MetricsManager.RecordRequest(srv.ID, float64(responseTime), false)
+		processing := time.Duration(50+rand.Intn(200)) * time.Millisecond
+		time.Sleep(processing)
+		responseMs := float64(processing.Milliseconds())
 
-	response := TestResponse{
-		Server:       srv.ID,
-		ResponseTime: responseTime,
-		Timestamp:    time.Now(),
+		failureChance := 0.05 + srv.ErrorRate
+		if failureChance > 0.4 {
+			failureChance = 0.4
+		}
+
+		if rand.Float64() < failureChance {
+			activeAfter := server.EndRequest(srv)
+			api.CircuitBreaker.RecordFailure(srv)
+			api.MetricsManager.RecordRequest(srv.ID, responseMs, true)
+
+			failureEvent := metrics.PacketEvent{
+				RequestID:      requestID,
+				Attempt:        attempt + 1,
+				Priority:       priority,
+				ServerID:       srv.ID,
+				ServerAddress:  fmt.Sprintf("%s:%d", srv.Address, srv.Port),
+				Status:         "failed",
+				Reason:         "simulated failure",
+				Timestamp:      time.Now(),
+				ResponseTime:   responseMs,
+				ActiveRequests: activeAfter,
+			}
+			api.MetricsManager.RecordAndBroadcastPacketEvent(api.EventSystem, failureEvent)
+			api.EventSystem.Publish(events.WarningEvent, fmt.Sprintf("Simulated failure on %s for request %s", srv.ID, requestID))
+			lastErr = fmt.Errorf("simulated failure")
+			continue
+		}
+
+		api.CircuitBreaker.RecordSuccess(srv)
+		api.MetricsManager.RecordRequest(srv.ID, responseMs, false)
+		activeAfter := server.EndRequest(srv)
+
+		successEvent := metrics.PacketEvent{
+			RequestID:      requestID,
+			Attempt:        attempt + 1,
+			Priority:       priority,
+			ServerID:       srv.ID,
+			ServerAddress:  fmt.Sprintf("%s:%d", srv.Address, srv.Port),
+			Status:         "completed",
+			Timestamp:      time.Now(),
+			ResponseTime:   responseMs,
+			ActiveRequests: activeAfter,
+		}
+		api.MetricsManager.RecordAndBroadcastPacketEvent(api.EventSystem, successEvent)
+
+		response := TestResponse{
+			Server:       srv.ID,
+			ResponseTime: int(responseMs),
+			Timestamp:    time.Now(),
+		}
+
+		api.EventSystem.Publish(events.InfoEvent, fmt.Sprintf("Test request %s served by %s (%s priority)", requestID, srv.ID, priority))
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if lastErr == nil {
+		lastErr = fmt.Errorf("all servers busy")
+	}
+	api.EventSystem.Publish(events.ErrorEvent, fmt.Sprintf("Test request %s failed: %v", requestID, lastErr))
+	http.Error(w, "No server available", http.StatusServiceUnavailable)
 }
 
 // handleEvents sets up a Server-Sent Events connection

@@ -34,4 +34,7 @@ type Server struct {
 	FailureCount        int
 	TrialSuccessCount   int
 	OpenSince           time.Time
+
+	// Concurrency tracking
+	ActiveRequests int64
 }
